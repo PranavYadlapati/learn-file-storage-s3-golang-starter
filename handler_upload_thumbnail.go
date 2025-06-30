@@ -3,7 +3,11 @@ package main
 import (
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"os"
+	"slices"
+	"strings"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -40,7 +44,16 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	defer file.Close()
-	mediaType := fileHeader.Header.Get("Content-Type")
+	mediaType, _, err := mime.ParseMediaType(fileHeader.Header.Get("Content-Type"))
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Unknown media type", err)
+		return
+	}
+	if !slices.Contains([]string{"image/jpeg", "image/png"}, mediaType) {
+		respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Invalid media type: %v", mediaType), nil)
+		return
+	}
+
 	videoMetaData, err := cfg.db.GetVideo(videoID)
 
 	if err != nil {
@@ -52,22 +65,21 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusUnauthorized, "You can't upload a thumbnail for this video", nil)
 		return
 	}
-	data, err := io.ReadAll(file)
+	fileExtension := strings.Split(mediaType, "/")[1]
+	filePath := strings.Join([]string{cfg.assetsRoot, fmt.Sprintf("%s.%s", videoID, fileExtension)}, "/")
+	new_file, err := os.Create(filePath)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't read file", err)
+		respondWithError(w, http.StatusInternalServerError, "Couldn't create file", err)
 		return
 	}
-	tn := thumbnail{data: data, mediaType: mediaType}
-	videoThumbnails[videoID] = tn
-	tnUrl := fmt.Sprintf("http://localhost:%s/api/thumbnails/%s", cfg.port, videoID)
-	videoMetaData.ThumbnailURL = &tnUrl
+	io.Copy(new_file, file)
+	newURL := fmt.Sprintf("http://localhost:%s/assets/%s.%s", cfg.port, videoID, fileExtension)
+	videoMetaData.ThumbnailURL = &newURL
 	err = cfg.db.UpdateVideo(videoMetaData)
 	if err != nil {
-		delete(videoThumbnails, videoID)
 		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
 		return
 	}
-
 	respondWithJSON(w, http.StatusOK, videoMetaData)
 	// // respondWithJSON(w, http.StatusOK, struct{}{})
 }
