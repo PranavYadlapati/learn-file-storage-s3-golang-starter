@@ -64,13 +64,31 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	defer tempFile.Close()
 	io.Copy(tempFile, file)
 	tempFile.Seek(0, io.SeekStart)
+	newTempFilePath, err := processVideoForFastEncoding(tempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't encode metata for video", err)
+		return
+	}
+	newTempFile, err := os.Open(newTempFilePath)
+	defer os.Remove(newTempFile.Name())
+	defer newTempFile.Close()
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't open file after encoding", err)
+		return
+	}
+
+	aspectRatio, err := getVideoAspectRatio(newTempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't get video aspect ratio", err)
+		return
+	}
 
 	key := getAssetPath(mediaType)
-
+	finalKey := findFolderForVideoAspectRatio(aspectRatio, key)
 	_, err = cfg.s3client.PutObject(context.Background(), &s3.PutObjectInput{
 		Bucket:      aws.String(cfg.s3Bucket),
-		Key:         aws.String(key),
-		Body:        tempFile,
+		Key:         aws.String(finalKey),
+		Body:        newTempFile,
 		ContentType: aws.String(mediaType),
 	})
 	if err != nil {
@@ -78,7 +96,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	url := cfg.getObjectURL(key)
+	url := cfg.getObjectURL(finalKey)
 	videoMetaData.VideoURL = &url
 	err = cfg.db.UpdateVideo(videoMetaData)
 	if err != nil {
