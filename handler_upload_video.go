@@ -1,7 +1,90 @@
 package main
 
 import (
+	"context"
+	"io"
+	"mime"
 	"net/http"
+	"os"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
+	"github.com/google/uuid"
 )
 
-func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request) {}
+func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request) {
+	const uploadLimit = 1 << 30
+	r.Body = http.MaxBytesReader(w, r.Body, uploadLimit)
+	videoID, err := uuid.Parse(r.PathValue("videoID"))
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid ID", err)
+		return
+	}
+	bearer, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Couldn't find bearer", err)
+		return
+	}
+	userID, err := auth.ValidateJWT(bearer, cfg.jwtSecret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Couldn't validate JWT", err)
+		return
+	}
+	videoMetaData, err := cfg.db.GetVideo(videoID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Video not found", err)
+		return
+	}
+	if userID != videoMetaData.UserID {
+		respondWithError(w, http.StatusUnauthorized, "You can't upload a video for this video", nil)
+		return
+	}
+	file, fileHeader, err := r.FormFile("video")
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Couldn't read file", err)
+		return
+	}
+	defer file.Close()
+	mediaType, _, err := mime.ParseMediaType(fileHeader.Header.Get("Content-Type"))
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "malformed mdeia type for request", err)
+		return
+	}
+	if mediaType != "video/mp4" {
+		respondWithError(w, http.StatusBadRequest, "Invalid media type", err)
+		return
+	}
+	tempFile, err := os.CreateTemp("", "tubely-upload.mp4")
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't create temp file", err)
+		return
+	}
+	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
+	io.Copy(tempFile, file)
+	tempFile.Seek(0, io.SeekStart)
+
+	key := getAssetPath(mediaType)
+
+	_, err = cfg.s3client.PutObject(context.Background(), &s3.PutObjectInput{
+		Bucket:      aws.String(cfg.s3Bucket),
+		Key:         aws.String(key),
+		Body:        tempFile,
+		ContentType: aws.String(mediaType),
+	})
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error uploading file to S3", err)
+		return
+	}
+
+	url := cfg.getObjectURL(key)
+	videoMetaData.VideoURL = &url
+	err = cfg.db.UpdateVideo(videoMetaData)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
+		return
+	}
+	respondWithJSON(w, http.StatusOK, videoMetaData)
+
+}
