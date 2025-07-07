@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -11,6 +12,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 // Faster encoding for MP4 files by moving all metadata to the start (usually is at end)
@@ -32,7 +37,18 @@ func (cfg apiConfig) ensureAssetsDir() error {
 }
 
 func (cfg apiConfig) getObjectURL(key string) string {
-	return fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, key)
+	return fmt.Sprintf("%s,%s", cfg.s3Bucket, key)
+}
+
+func generatePresignedURL(s3Client *s3.Client, bucket, key string, expiration time.Duration) (string, error) {
+	signedClient := s3.NewPresignClient(s3Client)
+	presignedReq, err := signedClient.PresignGetObject(context.Background(), &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key)}, s3.WithPresignExpires(expiration))
+	if err != nil {
+		return "", err
+	}
+	return presignedReq.URL, nil
 }
 
 func findFolderForVideoAspectRatio(aspectRatio string, fileName string) string {
