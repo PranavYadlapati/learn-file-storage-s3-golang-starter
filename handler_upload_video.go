@@ -2,17 +2,15 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"os"
-	"strings"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
-	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/database"
 	"github.com/google/uuid"
 )
 
@@ -99,50 +97,53 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	videoURL := cfg.getObjectURL(finalKey)
-	video := database.Video{
-		ID:           videoID,
-		CreatedAt:    videoMetaData.CreatedAt,
-		UpdatedAt:    time.Now(),
-		ThumbnailURL: videoMetaData.ThumbnailURL,
-		VideoURL:     &videoURL,
-		CreateVideoParams: database.CreateVideoParams{
-			Title:       videoMetaData.Title,
-			Description: videoMetaData.Description,
-			UserID:      videoMetaData.UserID,
-		},
-	}
+	cdnURL := fmt.Sprintf("https://%s/%s", cfg.s3CfDistribution, finalKey)
+	videoMetaData.VideoURL = &cdnURL
+
+	// videoURL := cfg.getObjectURL(finalKey)
+	// video := database.Video{
+	// 	ID:           videoID,
+	// 	CreatedAt:    videoMetaData.CreatedAt,
+	// 	UpdatedAt:    time.Now(),
+	// 	ThumbnailURL: videoMetaData.ThumbnailURL,
+	// 	VideoURL:     &videoURL,
+	// 	CreateVideoParams: database.CreateVideoParams{
+	// 		Title:       videoMetaData.Title,
+	// 		Description: videoMetaData.Description,
+	// 		UserID:      videoMetaData.UserID,
+	// 	},
+	// }
 	// url := cfg.getObjectURL(finalKey)
-	newVideo, err := cfg.dbVideoToSignedVideo(video)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't get signed URL", err)
-		return
-	}
+	// newVideo, err := cfg.dbVideoToSignedVideo(video)
+	// if err != nil {
+	// 	respondWithError(w, http.StatusInternalServerError, "Couldn't get signed URL", err)
+	// 	return
+	// }
 	// videoMetaData.VideoURL = &url
-	err = cfg.db.UpdateVideo(newVideo)
+	err = cfg.db.UpdateVideo(videoMetaData)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
 		return
 	}
-	respondWithJSON(w, http.StatusOK, newVideo)
+	respondWithJSON(w, http.StatusOK, videoMetaData)
 
 }
 
-func (cfg *apiConfig) dbVideoToSignedVideo(video database.Video) (database.Video, error) {
-	videoURL := video.VideoURL
-	if videoURL == nil {
-		return video, nil
-	}
-	parts := strings.Split(*videoURL, ",")
-	if len(parts) != 2 {
-		return video, nil
-	}
-	bucket, key := parts[0], parts[1]
-	url, err := generatePresignedURL(cfg.s3client, bucket, key, time.Hour)
-	if err != nil {
-		return video, err
-	}
-	video.VideoURL = &url
-	return video, nil
+// func (cfg *apiConfig) dbVideoToSignedVideo(video database.Video) (database.Video, error) {
+// 	videoURL := video.VideoURL
+// 	if videoURL == nil {
+// 		return video, nil
+// 	}
+// 	parts := strings.Split(*videoURL, ",")
+// 	if len(parts) != 2 {
+// 		return video, nil
+// 	}
+// 	bucket, key := parts[0], parts[1]
+// 	url, err := generatePresignedURL(cfg.s3client, bucket, key, time.Hour)
+// 	if err != nil {
+// 		return video, err
+// 	}
+// 	video.VideoURL = &url
+// 	return video, nil
 
-}
+// }
